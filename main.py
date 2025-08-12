@@ -59,10 +59,18 @@ class NetworkDiagnosticCLI:
                 with progress:
                     self.presenter.start_progress()
                     
+                    # Calcula total de testes baseado nos targets
+                    total_tests = 0
+                    for target in valid_targets:
+                        if target in ["8.8.8.8", "1.1.1.1"]:
+                            total_tests += 4  # ping, traceroute, mtr, speed_test
+                        else:
+                            total_tests += 3  # ping, traceroute, mtr
+                    
                     # Adiciona tarefa principal
                     main_task = self.presenter.add_progress_task(
                         "Executando testes de rede...", 
-                        total=len(valid_targets) * 4  # 4 testes por target
+                        total=total_tests
                     )
                     
                     # Executa testes com atualização incremental do progresso
@@ -129,42 +137,181 @@ class NetworkDiagnosticCLI:
     
     async def _run_tests_with_progress(self, targets: List[str], task_id) -> TestResults:
         """Executa testes com atualização de progresso por subteste/target."""
-        # Estratégia: rodar os testes e, em paralelo, fazer polling do progresso
-        # assumindo 4 subtestes por target.
-        total_subtests = len(targets) * 4
+        # Calcula total de testes baseado nos targets
+        total_tests = 0
+        for target in targets:
+            if target in ["8.8.8.8", "1.1.1.1"]:
+                total_tests += 4  # ping, traceroute, mtr, speed_test
+            else:
+                total_tests += 3  # ping, traceroute, mtr
 
-        async def run_tests():
-            return await self.network_service.run_comprehensive_test(targets)
-
-        async def poll_progress():
-            completed_prev = 0
-            while True:
-                completed = 0
-                for t in targets:
-                    p = self.network_service.get_test_progress(t)
-                    if p:
-                        completed += int(p.get("completed", 0))
-                # Garante não regredir
-                if completed > completed_prev:
-                    delta = completed - completed_prev
-                    completed_prev = completed
-                    self.presenter.update_progress(
-                        task_id,
-                        advance=delta,
-                        description=f"Executando testes de rede... ({completed}/{total_subtests})"
-                    )
-                await asyncio.sleep(0.2)
-
-        tests_task = asyncio.create_task(run_tests())
-        poll_task = asyncio.create_task(poll_progress())
-
+        # Primeira etapa: detecção do ISP
+        self.presenter.update_progress(
+            task_id,
+            advance=0,
+            description="Detectando ISP..."
+        )
+        
+        # Detecta ISP primeiro
+        isp_info = self.network_service.isp_detector.detect_isp_comprehensive()
+        
+        # Segunda etapa: execução dos testes
+        self.presenter.update_progress(
+            task_id,
+            advance=0, 
+            description="Executando testes de rede..."
+        )
+        
+        # Executa os testes com monitoramento em tempo real
+        from datetime import datetime
+        from src.models.test_results import TestResults
+        
+        test_results = TestResults(
+            timestamp=datetime.now(),
+            isp_info=isp_info,
+            tests=[]
+        )
+        
+        completed_tests = 0
+        
+        # Executa testes para cada target com monitoramento individual
+        for i, target in enumerate(targets, 1):
+            target_tests = 4 if target in ["8.8.8.8", "1.1.1.1"] else 3
+            
+            # Inicia teste do target
+            self.presenter.update_progress(
+                task_id,
+                advance=0,
+                description=f"Testando {target} ({i}/{len(targets)})..."
+            )
+            
+            # Executa teste com monitoramento de progresso
+            network_test = await self._run_single_target_with_progress(
+                target, task_id, completed_tests, total_tests
+            )
+            test_results.tests.append(network_test)
+            
+            # Atualiza progresso baseado nos testes completados
+            completed_tests += target_tests
+            self.presenter.update_progress(
+                task_id,
+                advance=0,
+                description=f"Concluído {target} ({completed_tests}/{total_tests})"
+            )
+        
+        # Finaliza o progresso
+        self.presenter.update_progress(
+            task_id,
+            advance=0,
+            description="Testes concluídos"
+        )
+        
+        return test_results
+    
+    async def _run_single_target_with_progress(self, target: str, task_id, base_completed: int, total_tests: int):
+        """Executa teste para um target com atualização de progresso por subteste."""
+        from datetime import datetime
+        from src.models.network_test import NetworkTest
+        
+        test = NetworkTest(
+            target=target,
+            timestamp=datetime.now(),
+            ping_result=None,
+            traceroute_result=None,
+            mtr_result=None,
+            speed_test_result=None
+        )
+        
+        current_completed = base_completed
+        
         try:
-            result = await tests_task
-            return result
-        finally:
-            poll_task.cancel()
-            # Finaliza somente atualizando a descrição, sem avançar além do acumulado
-            self.presenter.update_progress(task_id, advance=0, description="Testes concluídos")
+            # Teste de Ping
+            self.presenter.update_progress(
+                task_id,
+                advance=0,
+                description=f"Ping para {target}... ({current_completed}/{total_tests})"
+            )
+            
+            ping_result = await self.network_service._run_ping_test(target)
+            test.ping_result = ping_result
+            current_completed += 1
+            
+            self.presenter.update_progress(
+                task_id,
+                advance=1,
+                description=f"Ping concluído para {target} ({current_completed}/{total_tests})"
+            )
+            
+            # Teste de Traceroute
+            self.presenter.update_progress(
+                task_id,
+                advance=0,
+                description=f"Traceroute para {target}... ({current_completed}/{total_tests})"
+            )
+            
+            traceroute_result = await self.network_service._run_traceroute_test(target)
+            test.traceroute_result = traceroute_result
+            current_completed += 1
+            
+            self.presenter.update_progress(
+                task_id,
+                advance=1,
+                description=f"Traceroute concluído para {target} ({current_completed}/{total_tests})"
+            )
+            
+            # Teste de MTR
+            self.presenter.update_progress(
+                task_id,
+                advance=0,
+                description=f"MTR para {target}... ({current_completed}/{total_tests})"
+            )
+            
+            mtr_result = await self.network_service._run_mtr_test(target)
+            test.mtr_result = mtr_result
+            current_completed += 1
+            
+            self.presenter.update_progress(
+                task_id,
+                advance=1,
+                description=f"MTR concluído para {target} ({current_completed}/{total_tests})"
+            )
+            
+            # Teste de velocidade (apenas para targets específicos)
+            if target in ["8.8.8.8", "1.1.1.1"]:
+                self.presenter.update_progress(
+                    task_id,
+                    advance=0,
+                    description=f"Teste de velocidade para {target}... ({current_completed}/{total_tests})"
+                )
+                
+                try:
+                    speed_result = await asyncio.wait_for(
+                        self.network_service._run_speed_test(), 
+                        timeout=120.0
+                    )
+                    test.speed_test_result = speed_result
+                except (asyncio.TimeoutError, Exception):
+                    # Teste de velocidade falhou ou demorou muito - ignora
+                    pass
+                
+                current_completed += 1
+                self.presenter.update_progress(
+                    task_id,
+                    advance=1,
+                    description=f"Teste de velocidade concluído para {target} ({current_completed}/{total_tests})"
+                )
+        
+        except Exception as e:
+            # Se houver erro, ainda avança o progresso para não travar
+            remaining = (4 if target in ["8.8.8.8", "1.1.1.1"] else 3) - (current_completed - base_completed)
+            if remaining > 0:
+                self.presenter.update_progress(
+                    task_id,
+                    advance=remaining,
+                    description=f"Erro no teste de {target} ({base_completed + (4 if target in ['8.8.8.8', '1.1.1.1'] else 3)}/{total_tests})"
+                )
+        
+        return test
     
     async def _generate_reports(self, test_results, args):
         """Gera relatórios dos testes."""

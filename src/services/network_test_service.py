@@ -80,16 +80,25 @@ class NetworkTestService:
             # Executa teste de velocidade se necessário
             if target in ["8.8.8.8", "1.1.1.1"]:  # Apenas para targets específicos
                 try:
-                    speed_result = await self._run_speed_test()
+                    speed_task = asyncio.create_task(self._run_speed_test())
+                    speed_task.add_done_callback(lambda t: self._on_subtest_done(target, "speed", t))
+                    
+                    # Aguarda o teste de velocidade com timeout de 2 minutos
+                    speed_result = await asyncio.wait_for(speed_task, timeout=120.0)
                     test.speed_test_result = speed_result
+                except asyncio.TimeoutError:
+                    # Teste de velocidade demorou muito - ignora
+                    pass
                 except Exception:
-                    pass  # Teste de velocidade é opcional
+                    # Teste de velocidade falhou - ignora
+                    pass
         
         except Exception as e:
             # Log error mas não falha o teste completo
             pass
         
         finally:
+            # Remove o teste da lista de testes ativos quando concluído
             if target in self._current_tests:
                 del self._current_tests[target]
         
@@ -110,6 +119,8 @@ class NetworkTestService:
             test.traceroute_result = result
         elif kind == "mtr" and isinstance(result, MTRResult):
             test.mtr_result = result
+        elif kind == "speed" and isinstance(result, SpeedTestResult):
+            test.speed_test_result = result
     
     async def _run_ping_test(self, target: str) -> PingResult:
         """Executa teste de ping."""
@@ -199,6 +210,20 @@ class NetworkTestService:
     async def _run_speed_test(self) -> SpeedTestResult:
         """Executa teste de velocidade."""
         try:
+            # Primeiro verifica se speedtest-cli está disponível
+            check_cmd = "which speedtest-cli"
+            check_process = await asyncio.create_subprocess_shell(
+                check_cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            await check_process.communicate()
+            
+            if check_process.returncode != 0:
+                raise SpeedTestError(
+                    reason="speedtest-cli não está instalado. Execute: pip install speedtest-cli"
+                )
+            
             # Executa speedtest-cli
             cmd = "speedtest-cli --json"
             process = await asyncio.create_subprocess_shell(
@@ -242,7 +267,7 @@ class NetworkTestService:
         test = self._current_tests[target]
         
         completed_tests = 0
-        total_tests = 4  # ping, traceroute, mtr, speed (opcional)
+        total_tests = 3  # ping, traceroute, mtr (speed test é opcional e conta separadamente)
         
         if test.ping_result:
             completed_tests += 1
@@ -250,8 +275,12 @@ class NetworkTestService:
             completed_tests += 1
         if test.mtr_result:
             completed_tests += 1
-        if test.speed_test_result:
-            completed_tests += 1
+        
+        # Adiciona speed test apenas para targets específicos
+        if target in ["8.8.8.8", "1.1.1.1"]:
+            total_tests = 4
+            if test.speed_test_result:
+                completed_tests += 1
         
         return {
             "target": target,
