@@ -125,6 +125,9 @@ class ConsolePresenter:
         """Exibe resultados detalhados dos testes."""
         for i, test in enumerate(test_results.tests, 1):
             self._show_single_test_result(test, i)
+        
+        # Exibe tabela detalhada do MTR se há problemas
+        self.show_mtr_details_table(test_results.tests)
     
     def _show_single_test_result(self, test: NetworkTest, test_number: int):
         """Exibe resultado de um teste específico."""
@@ -157,9 +160,30 @@ class ConsolePresenter:
         if test.mtr_result:
             mtr = test.mtr_result
             status_style = self._get_status_style(mtr.status)
-            details = (f"Hops: {mtr.total_hops} | "
-                      f"Perda: {mtr.total_loss_percent:.1f}% | "
-                      f"Latência: {mtr.avg_latency:.1f}ms")
+            
+            # Detalhes básicos
+            basic_details = (f"Hops: {mtr.total_hops} | "
+                           f"Perda: {mtr.total_loss_percent:.1f}% | "
+                           f"Latência: {mtr.avg_latency:.1f}ms")
+            
+            # Adiciona informações sobre hops problemáticos
+            problematic_hops = [hop for hop in mtr.hops if hop.loss_percent > 5]
+            if problematic_hops:
+                hop_details = []
+                for hop in problematic_hops[:2]:  # Mostra até 2 hops problemáticos
+                    hop_info = f"Hop {hop.hop_number}"
+                    if hop.hostname and hop.hostname != hop.ip_address:
+                        hop_info += f" ({hop.hostname[:20]}...)" if len(hop.hostname) > 20 else f" ({hop.hostname})"
+                    hop_info += f": {hop.loss_percent:.1f}%"
+                    hop_details.append(hop_info)
+                
+                if len(problematic_hops) > 2:
+                    hop_details.append(f"+ {len(problematic_hops) - 2} outros")
+                
+                details = basic_details + " | Problemas: " + ", ".join(hop_details)
+            else:
+                details = basic_details
+                
             table.add_row("MTR", f"[{status_style}]{mtr.status.value}[/{status_style}]", details)
         
         # Speed Test
@@ -238,6 +262,60 @@ class ConsolePresenter:
         
         self.console.print(table)
         self.console.print()
+    
+    def show_mtr_details_table(self, tests: List[NetworkTest]):
+        """Exibe tabela detalhada do MTR quando há problemas."""
+        mtr_tests = [test for test in tests if test.mtr_result and test.mtr_result.hops]
+        
+        for test in mtr_tests:
+            mtr = test.mtr_result
+            # Só mostra detalhes se há hops com perda significativa
+            problematic_hops = [hop for hop in mtr.hops if hop.loss_percent > 1]
+            
+            if problematic_hops:
+                status_style = self._get_status_style(mtr.status)
+                title = f"MTR Detalhado: {test.target}"
+                
+                table = Table(title=title, border_style=status_style)
+                table.add_column("Hop", style="cyan", width=4)
+                table.add_column("Hostname/IP", style="white", width=30)
+                table.add_column("Perda %", justify="right", width=8)
+                table.add_column("Enviados", justify="right", width=8)
+                table.add_column("Último", justify="right", width=8)
+                table.add_column("Média", justify="right", width=8)
+                table.add_column("Melhor", justify="right", width=8)
+                table.add_column("Pior", justify="right", width=8)
+                
+                for hop in mtr.hops:
+                    # Determina cor baseada na perda
+                    if hop.loss_percent == 0:
+                        loss_style = "green"
+                    elif hop.loss_percent <= 5:
+                        loss_style = "yellow"
+                    else:
+                        loss_style = "red"
+                    
+                    # Formata hostname/IP
+                    if hop.hostname and hop.hostname != hop.ip_address:
+                        host_display = hop.hostname[:25] + "..." if len(hop.hostname) > 25 else hop.hostname
+                        if hop.ip_address and hop.ip_address != hop.hostname:
+                            host_display += f" ({hop.ip_address})"
+                    else:
+                        host_display = hop.ip_address or "???"
+                    
+                    table.add_row(
+                        str(hop.hop_number),
+                        host_display,
+                        f"[{loss_style}]{hop.loss_percent:.1f}%[/{loss_style}]",
+                        str(hop.sent_packets),
+                        f"{hop.last_time:.1f}ms" if hop.last_time > 0 else "---",
+                        f"{hop.avg_time:.1f}ms" if hop.avg_time > 0 else "---",
+                        f"{hop.best_time:.1f}ms" if hop.best_time > 0 else "---",
+                        f"{hop.worst_time:.1f}ms" if hop.worst_time > 0 else "---"
+                    )
+                
+                self.console.print(table)
+                self.console.print()
     
     def show_error(self, message: str, title: str = "Erro"):
         """Exibe mensagem de erro."""

@@ -162,8 +162,9 @@ class NetworkTestService:
     async def _run_mtr_test(self, target: str) -> MTRResult:
         """Executa teste MTR."""
         try:
-            # Executa comando mtr
-            cmd = f"mtr -r -c 10 {target}"
+            # Executa comando mtr com parâmetros otimizados
+            # -r: report mode, -w: wide report, -z: lookup ASN, -b: both names and numbers, -c: count
+            cmd = f"mtr -rwzbc 30 {target}"
             process = await asyncio.create_subprocess_shell(
                 cmd,
                 stdout=asyncio.subprocess.PIPE,
