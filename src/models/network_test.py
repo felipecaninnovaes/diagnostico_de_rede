@@ -75,6 +75,7 @@ class MTRHop:
     best_time: float
     worst_time: float
     std_dev: float
+    asn: Optional[str] = None
 
 
 @dataclass

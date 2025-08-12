@@ -18,6 +18,7 @@ class ISPProvider(Enum):
     NETFLEX = "Netflex (NET Claro)"
     OI = "Oi"
     TIM = "TIM"
+    CLARO = "CLARO"
     UNKNOWN = "Desconhecido"
 
 

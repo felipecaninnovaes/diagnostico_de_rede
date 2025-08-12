@@ -14,7 +14,7 @@ class MTRParser:
         # Ex.: "  2. AS???    152-255-239-67.user.vivozap.com.br (152.255.239.67)     0.0%    30    3.0   3.1   2.5  10.6   1.5"
         # Ex.: "  6. AS15169  72.14.220.222                                           0.0%    30   17.3  17.5  17.0  24.5   1.3"
         self.hop_pattern = re.compile(
-            r"^\s*(\d+)\.\s+AS\S+\s+(.+?)\s+"  # hop e campo hostname/ip (sem o AS)
+            r"^\s*(\d+)\.\s+(AS\S+)\s+(.+?)\s+"  # hop, ASN e campo hostname/ip
             r"([\d.]+)%\s+(\d+)\s+"              # perda e enviados
             r"([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s*$"  # last/avg/best/wrst/stdev
         )
@@ -77,14 +77,15 @@ class MTRParser:
             return None
 
         hop_number = int(m.group(1))
-        name_field = m.group(2).strip()
-        loss_percent = float(m.group(3))
-        sent_packets = int(m.group(4))
-        last_time = float(m.group(5))
-        avg_time = float(m.group(6))
-        best_time = float(m.group(7))
-        worst_time = float(m.group(8))
-        std_dev = float(m.group(9))
+        asn = m.group(2).strip()
+        name_field = m.group(3).strip()
+        loss_percent = float(m.group(4))
+        sent_packets = int(m.group(5))
+        last_time = float(m.group(6))
+        avg_time = float(m.group(7))
+        best_time = float(m.group(8))
+        worst_time = float(m.group(9))
+        std_dev = float(m.group(10))
 
         # Extrai IP entre parênteses, se houver
         ip_match = self.ip_in_parens.search(name_field)
@@ -106,10 +107,17 @@ class MTRParser:
         if not ip_address:
             ip_address = hostname or "???"
 
+        # Normaliza ASN
+        if not asn or asn.upper() in {"AS???", "AS?", "ASUNKNOWN"}:
+            asn_norm = None
+        else:
+            asn_norm = asn
+
         return MTRHop(
             hop_number=hop_number,
             hostname=hostname or "AS???",
             ip_address=ip_address,
+            asn=asn_norm,
             loss_percent=loss_percent,
             sent_packets=sent_packets,
             last_time=last_time,

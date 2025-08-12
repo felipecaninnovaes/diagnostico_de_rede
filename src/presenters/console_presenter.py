@@ -278,8 +278,9 @@ class ConsolePresenter:
                 
                 table = Table(title=title, border_style=status_style)
                 table.add_column("Hop", style="cyan", width=4)
-                # Aumenta a largura para mostrar domínios completos (ex.: dsl.telesp.net.br, vivozap.com.br)
-                table.add_column("Hostname/IP", style="white", width=40)
+                table.add_column("AS", style="white", width=8)
+                # Aumenta a largura e permite quebra para mostrar domínios completos
+                table.add_column("Hostname/IP", style="white", width=40, overflow="fold")
                 table.add_column("Perda %", justify="right", width=8)
                 table.add_column("Enviados", justify="right", width=8)
                 table.add_column("Último", justify="right", width=8)
@@ -315,12 +316,12 @@ class ConsolePresenter:
                     else:
                         host_display = "???"
 
-                    # Trunca suavemente apenas se muito longo
-                    if len(host_display) > 50:
-                        host_display = host_display[:47] + "..."
+                    # Não trunca; deixa o Rich quebrar linha (overflow="fold")
+                    as_display = getattr(hop, "asn", None) or "—"
                     
                     table.add_row(
                         str(hop.hop_number),
+                        as_display,
                         host_display,
                         f"[{loss_style}]{hop.loss_percent:.1f}%[/{loss_style}]",
                         str(hop.sent_packets),

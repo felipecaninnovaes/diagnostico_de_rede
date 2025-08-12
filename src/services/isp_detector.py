@@ -102,6 +102,16 @@ class ISPDetector:
                 ],
                 priority=8
             ),
+            ISPDetectionRule(
+                provider=ISPProvider.CLARO,
+                ip_patterns=[
+                    r"^187\.39\.",
+                ],
+                hostname_patterns=[
+                    r".*virtua\.com\.br.*",
+                ],
+                priority=8
+            ),
         ]
     
     def detect_public_ip(self) -> Tuple[str, IPType]:
