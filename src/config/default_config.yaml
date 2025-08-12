@@ -1,0 +1,55 @@
+# Configuração padrão da aplicação
+
+default_targets:
+  - "8.8.8.8"          # Google DNS
+  - "1.1.1.1"          # Cloudflare DNS  
+  - "208.67.222.222"   # OpenDNS
+  - "9.9.9.9"          # Quad9 DNS
+
+# Configurações de teste
+test_settings:
+  ping:
+    count: 4
+    timeout: 10
+  
+  traceroute:
+    max_hops: 30
+    timeout: 5
+  
+  mtr:
+    count: 10
+    timeout: 60
+  
+  speed_test:
+    enabled: true
+    timeout: 120
+
+# Configurações de relatório
+report_settings:
+  output_directory: "./reports"
+  formats:
+    - "json"
+    - "text" 
+    - "csv"
+  auto_open: false
+
+# Configurações de interface
+ui_settings:
+  show_progress: true
+  show_detailed_output: false
+  console_width: 120
+  color_theme: "auto"  # auto, dark, light
+
+# Configurações de rede
+network_settings:
+  max_concurrent_tests: 3
+  retry_attempts: 2
+  connection_timeout: 10
+
+# Configurações de ISP detection
+isp_detection:
+  confidence_threshold: 0.5
+  fallback_services:
+    - "https://httpbin.org/ip"
+    - "https://api.ipify.org"
+    - "https://ipinfo.io/ip"

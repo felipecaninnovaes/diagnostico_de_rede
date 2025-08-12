@@ -1,0 +1,24 @@
+# Byte-compiled / optimized / compiled files
+**/__pycache__/
+*.pyc
+*.pyd
+*.so
+# Virtual environment
+venv/
+env/
+# Editors and IDEs
+.vscode/
+.idea/
+# Test and build artifacts
+.pytest_cache/
+build/
+dist/
+# Jupyter Notebook
+.ipynb_checkpoints/
+# Logs and database
+*.log
+*.sqlite3
+dataset
+output
+logs
+input
