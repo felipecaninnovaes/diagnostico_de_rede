@@ -64,26 +64,18 @@ class NetworkTestService:
         self._current_tests[target] = test
         
         try:
-            # Executa testes em paralelo quando possível
-            ping_task = self._run_ping_test(target)
-            traceroute_task = self._run_traceroute_test(target)
-            mtr_task = self._run_mtr_test(target)
-            
-            # Aguarda testes básicos
-            ping_result, traceroute_result, mtr_result = await asyncio.gather(
-                ping_task, traceroute_task, mtr_task,
-                return_exceptions=True
-            )
-            
-            # Processa resultados
-            if isinstance(ping_result, PingResult):
-                test.ping_result = ping_result
-            
-            if isinstance(traceroute_result, TracerouteResult):
-                test.traceroute_result = traceroute_result
-            
-            if isinstance(mtr_result, MTRResult):
-                test.mtr_result = mtr_result
+            # Dispara tarefas em paralelo e atualiza estado assim que cada uma termina
+            ping_task = asyncio.create_task(self._run_ping_test(target))
+            traceroute_task = asyncio.create_task(self._run_traceroute_test(target))
+            mtr_task = asyncio.create_task(self._run_mtr_test(target))
+
+            # Anexa callbacks para refletir progresso imediatamente
+            ping_task.add_done_callback(lambda t: self._on_subtest_done(target, "ping", t))
+            traceroute_task.add_done_callback(lambda t: self._on_subtest_done(target, "traceroute", t))
+            mtr_task.add_done_callback(lambda t: self._on_subtest_done(target, "mtr", t))
+
+            # Aguarda conclusão (exceções são absorvidas para não abortar as demais)
+            await asyncio.gather(ping_task, traceroute_task, mtr_task, return_exceptions=True)
             
             # Executa teste de velocidade se necessário
             if target in ["8.8.8.8", "1.1.1.1"]:  # Apenas para targets específicos
@@ -102,6 +94,22 @@ class NetworkTestService:
                 del self._current_tests[target]
         
         return test
+
+    def _on_subtest_done(self, target: str, kind: str, task: asyncio.Task):
+        """Callback para registrar resultado do subteste sem bloquear o loop."""
+        test = self._current_tests.get(target)
+        if not test:
+            return
+        try:
+            result = task.result()
+        except Exception:
+            return
+        if kind == "ping" and isinstance(result, PingResult):
+            test.ping_result = result
+        elif kind == "traceroute" and isinstance(result, TracerouteResult):
+            test.traceroute_result = result
+        elif kind == "mtr" and isinstance(result, MTRResult):
+            test.mtr_result = result
     
     async def _run_ping_test(self, target: str) -> PingResult:
         """Executa teste de ping."""

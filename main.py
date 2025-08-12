@@ -65,7 +65,7 @@ class NetworkDiagnosticCLI:
                         total=len(valid_targets) * 4  # 4 testes por target
                     )
                     
-                    # Executa testes
+                    # Executa testes com atualização incremental do progresso
                     test_results = await self._run_tests_with_progress(
                         valid_targets, main_task
                     )
@@ -128,14 +128,43 @@ class NetworkDiagnosticCLI:
             raise NetworkDiagnosticException(f"Erro ao carregar targets do arquivo: {e}")
     
     async def _run_tests_with_progress(self, targets: List[str], task_id) -> TestResults:
-        """Executa testes com atualização de progresso."""
-        # Executa teste completo
-        test_results = await self.network_service.run_comprehensive_test(targets)
-        
-        # Atualiza progresso para 100%
-        self.presenter.update_progress(task_id, advance=100, description="Testes concluídos")
-        
-        return test_results
+        """Executa testes com atualização de progresso por subteste/target."""
+        # Estratégia: rodar os testes e, em paralelo, fazer polling do progresso
+        # assumindo 4 subtestes por target.
+        total_subtests = len(targets) * 4
+
+        async def run_tests():
+            return await self.network_service.run_comprehensive_test(targets)
+
+        async def poll_progress():
+            completed_prev = 0
+            while True:
+                completed = 0
+                for t in targets:
+                    p = self.network_service.get_test_progress(t)
+                    if p:
+                        completed += int(p.get("completed", 0))
+                # Garante não regredir
+                if completed > completed_prev:
+                    delta = completed - completed_prev
+                    completed_prev = completed
+                    self.presenter.update_progress(
+                        task_id,
+                        advance=delta,
+                        description=f"Executando testes de rede... ({completed}/{total_subtests})"
+                    )
+                await asyncio.sleep(0.2)
+
+        tests_task = asyncio.create_task(run_tests())
+        poll_task = asyncio.create_task(poll_progress())
+
+        try:
+            result = await tests_task
+            return result
+        finally:
+            poll_task.cancel()
+            # Finaliza somente atualizando a descrição, sem avançar além do acumulado
+            self.presenter.update_progress(task_id, advance=0, description="Testes concluídos")
     
     async def _generate_reports(self, test_results, args):
         """Gera relatórios dos testes."""
