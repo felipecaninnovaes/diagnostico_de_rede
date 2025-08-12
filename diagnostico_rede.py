@@ -2,6 +2,7 @@ import subprocess
 import platform
 import socket
 import speedtest
+import requests
 from rich.console import Console
 from rich.table import Table
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
@@ -39,6 +40,151 @@ DESTINOS = {
     "☁️ Cloudflare DNS": "1.1.1.1",
     "🔍 Google DNS": "8.8.8.8",
 }
+
+# Configuração dos provedores
+PROVEDORES = {
+    "Vivo": {
+        "ips_conhecidos": [
+            "201.95.209.43", "201.95.215.228", "187.57.45.67"
+        ],
+        "ranges": ["201.95.", "187.57."],
+        "hostname_pattern": r".*\.dsl\.telesp\.net\.br",
+        "tipo": "IP Dinâmico"
+    },
+    "Netflex": {
+        "ips_conhecidos": ["170.79.166.98"],
+        "ranges": ["170.79.166."],
+        "hostname_pattern": r".*netflex.*",
+        "tipo": "IP Fixo"
+    }
+}
+
+def obter_ip_publico():
+    """Obtém o IP público atual usando múltiplos serviços"""
+    servicos = [
+        "https://api.ipify.org",
+        "https://ifconfig.me/ip",
+        "https://icanhazip.com",
+        "https://checkip.amazonaws.com"
+    ]
+    
+    for servico in servicos:
+        try:
+            response = requests.get(servico, timeout=5)
+            if response.status_code == 200:
+                ip = response.text.strip()
+                # Validar se é um IP válido
+                if re.match(r'^\d+\.\d+\.\d+\.\d+$', ip):
+                    return ip
+        except:
+            continue
+    
+    return None
+
+def obter_hostname_reverso(ip):
+    """Obtém o hostname reverso do IP"""
+    try:
+        hostname = socket.gethostbyaddr(ip)[0]
+        return hostname
+    except:
+        return None
+
+def detectar_provedor():
+    """Detecta qual provedor está sendo usado"""
+    ip_publico = obter_ip_publico()
+    
+    if not ip_publico:
+        return {
+            "provedor": "Desconhecido",
+            "ip": "Não detectado",
+            "hostname": None,
+            "tipo": "N/A",
+            "confianca": 0
+        }
+    
+    hostname = obter_hostname_reverso(ip_publico)
+    
+    # Verificar cada provedor
+    for nome_provedor, config in PROVEDORES.items():
+        confianca = 0
+        
+        # Verificar IP exato (maior confiança)
+        if ip_publico in config["ips_conhecidos"]:
+            confianca += 90
+        
+        # Verificar range de IPs
+        for range_ip in config["ranges"]:
+            if ip_publico.startswith(range_ip):
+                confianca += 70
+                break
+        
+        # Verificar hostname pattern
+        if hostname and re.match(config["hostname_pattern"], hostname, re.IGNORECASE):
+            confianca += 60
+        
+        # Se confiança for alta o suficiente, retornar este provedor
+        if confianca >= 60:
+            return {
+                "provedor": nome_provedor,
+                "ip": ip_publico,
+                "hostname": hostname,
+                "tipo": config["tipo"],
+                "confianca": confianca
+            }
+    
+    # Se não identificou nenhum provedor conhecido
+    return {
+        "provedor": "Desconhecido",
+        "ip": ip_publico,
+        "hostname": hostname,
+        "tipo": "N/A",
+        "confianca": 0
+    }
+
+def mostrar_info_conexao():
+    """Exibe informações sobre a conexão atual"""
+    with Status("[cyan]🔍 Detectando provedor de internet...", spinner="dots"):
+        info_conexao = detectar_provedor()
+    
+    # Determinar cor baseada na confiança
+    if info_conexao["confianca"] >= 90:
+        cor_provedor = "green"
+        icone_confianca = "🟢"
+    elif info_conexao["confianca"] >= 60:
+        cor_provedor = "yellow"
+        icone_confianca = "🟡"
+    else:
+        cor_provedor = "red"
+        icone_confianca = "🔴"
+    
+    # Criar tabela de informações da conexão
+    table = Table(show_header=True, header_style="bold cyan", width=100)
+    table.add_column("🌐 Informação", style="cyan", width=25)
+    table.add_column("📋 Valor", style="white", width=35)
+    table.add_column("📊 Status", justify="center", width=10)
+    
+    # Ícone do provedor
+    icone_provedor = "📶" if info_conexao["provedor"] != "Desconhecido" else "❓"
+    
+    table.add_row(
+        f"{icone_provedor} Provedor", 
+        f"[{cor_provedor}]{info_conexao['provedor']}[/{cor_provedor}]", 
+        icone_confianca
+    )
+    table.add_row("🌍 IP Público", info_conexao["ip"], "🔍")
+    table.add_row("🏷️ Tipo de IP", info_conexao["tipo"], "📋")
+    
+    if info_conexao["hostname"]:
+        table.add_row("🖥️ Hostname", info_conexao["hostname"][:45], "🔗")
+    
+    # Mostrar confiança apenas se for identificado
+    if info_conexao["confianca"] > 0:
+        table.add_row("🎯 Confiança", f"{info_conexao['confianca']}%", icone_confianca)
+    
+    console.print("\n")
+    console.print(Panel(table, title="🔌 Informações da Conexão", border_style="blue"))
+    
+    return info_conexao
 
 def mostrar_banner():
     """Exibe um banner de boas-vindas atrativo"""
@@ -103,6 +249,168 @@ def resolve_dns(host):
         return socket.gethostbyname(host)
     except socket.error as e:
         return f"Erro: {e}"
+
+def formatar_ping_resumo(resultado_ping):
+    """Extrai informações resumidas do resultado do ping"""
+    linhas = resultado_ping.strip().split('\n')
+    
+    # Extrair informações básicas
+    info = {
+        'host': '',
+        'ip': '',
+        'pacotes_enviados': 0,
+        'pacotes_recebidos': 0,
+        'perda': '0%',
+        'latencia_min': 0,
+        'latencia_avg': 0,
+        'latencia_max': 0
+    }
+    
+    # Primeira linha com host e IP
+    primeira_linha = linhas[0] if linhas else ""
+    if "PING" in primeira_linha:
+        partes = primeira_linha.split()
+        if len(partes) >= 3:
+            info['host'] = partes[1]
+            # Extrair IP entre parênteses
+            ip_match = re.search(r'\(([^)]+)\)', primeira_linha)
+            if ip_match:
+                info['ip'] = ip_match.group(1)
+    
+    # Estatísticas finais
+    for linha in reversed(linhas):
+        if "packet loss" in linha:
+            # Extrair estatísticas de perda
+            match = re.search(r'(\d+) packets transmitted, (\d+) received, (\d+(?:\.\d+)?%)', linha)
+            if match:
+                info['pacotes_enviados'] = int(match.group(1))
+                info['pacotes_recebidos'] = int(match.group(2))
+                info['perda'] = match.group(3)
+        elif "rtt min/avg/max" in linha:
+            # Extrair latências
+            match = re.search(r'= ([\d\.]+)/([\d\.]+)/([\d\.]+)/([\d\.]+) ms', linha)
+            if match:
+                info['latencia_min'] = float(match.group(1))
+                info['latencia_avg'] = float(match.group(2))
+                info['latencia_max'] = float(match.group(3))
+    
+    return info
+
+def formatar_traceroute_resumo(resultado_traceroute):
+    """Extrai rota simplificada do traceroute"""
+    linhas = resultado_traceroute.strip().split('\n')
+    
+    rota = []
+    destino_info = ""
+    
+    # Primeira linha com destino
+    if linhas and "traceroute to" in linhas[0]:
+        destino_info = linhas[0]
+    
+    # Processar cada salto
+    for linha in linhas[1:]:
+        if re.match(r'^\s*\d+', linha):
+            hop_num = re.match(r'^\s*(\d+)', linha).group(1)
+            
+            # Extrair IPs e hostnames
+            hosts = []
+            tempos = []
+            
+            # Pegar todos os IPs/hostnames da linha
+            ip_pattern = r'(\d+\.\d+\.\d+\.\d+)'
+            hostname_pattern = r'([a-zA-Z0-9.-]+\.[a-zA-Z]{2,})'
+            tempo_pattern = r'(\d+(?:\.\d+)?)\s*ms'
+            
+            ips = re.findall(ip_pattern, linha)
+            hostnames = re.findall(hostname_pattern, linha)
+            tempos_found = re.findall(tempo_pattern, linha)
+            
+            # Pegar primeiro hostname válido ou IP
+            host_principal = ""
+            if hostnames:
+                # Filtrar hostnames que não são IPs
+                hostnames_validos = [h for h in hostnames if not re.match(r'^\d+\.\d+\.\d+\.\d+$', h)]
+                if hostnames_validos:
+                    host_principal = hostnames_validos[0]
+            
+            if not host_principal and ips:
+                host_principal = ips[0]
+            
+            # Se não tem host, é timeout
+            if not host_principal and '*' in linha:
+                host_principal = "* timeout"
+            
+            # Latência média dos tempos encontrados
+            latencia_media = 0
+            if tempos_found:
+                latencias = [float(t) for t in tempos_found]
+                latencia_media = sum(latencias) / len(latencias)
+            
+            if host_principal:
+                rota.append({
+                    'hop': int(hop_num),
+                    'host': host_principal,
+                    'latencia': round(latencia_media, 1) if latencia_media > 0 else 0
+                })
+    
+    return {
+        'destino_info': destino_info,
+        'rota': rota
+    }
+
+def formatar_mtr_resumo(resultado_mtr):
+    """Extrai resumo do MTR focando nos pontos críticos"""
+    linhas = resultado_mtr.strip().split('\n')
+    
+    resumo = {
+        'destino': '',
+        'hops_problematicos': [],
+        'perda_total': 0,
+        'latencia_final': 0
+    }
+    
+    # Extrair destino
+    for linha in linhas:
+        if "HOST:" in linha:
+            parts = linha.split()
+            if len(parts) > 1:
+                resumo['destino'] = parts[1]
+            break
+    
+    # Processar linhas de dados
+    for linha in linhas:
+        if re.match(r'^\s*\d+\.\|--', linha):
+            partes = linha.split()
+            if len(partes) >= 6:
+                try:
+                    hop_num = int(partes[0].replace('.', '').replace('|--', ''))
+                    host = partes[1]
+                    loss_pct = float(partes[2].replace('%', ''))
+                    
+                    # Ignorar linhas com ???
+                    if '???' in host:
+                        continue
+                    
+                    # Se tem perda significativa, adicionar aos problemáticos
+                    if loss_pct > 0:
+                        resumo['hops_problematicos'].append({
+                            'hop': hop_num,
+                            'host': host,
+                            'perda': loss_pct
+                        })
+                    
+                    # Última linha válida para latência final
+                    if len(partes) >= 7 and loss_pct < 100:
+                        try:
+                            latencia = float(partes[5])  # Coluna Avg
+                            resumo['latencia_final'] = latencia
+                        except:
+                            pass
+                            
+                except:
+                    continue
+    
+    return resumo
 
 def test_speed(server_id=None):
     try:
@@ -535,12 +843,34 @@ def main():
     # Banner de boas-vindas
     mostrar_banner()
     
+    # Detectar e mostrar informações da conexão
+    info_conexao = mostrar_info_conexao()
+    
     # Criar pasta de resultados primeiro
     pasta = gerar_pasta_resultados()
     
     resultados = {}
+    # Adicionar informações da conexão aos resultados
+    resultados["Conexao"] = {
+        "provedor": info_conexao["provedor"],
+        "ip_publico": info_conexao["ip"],
+        "hostname": info_conexao["hostname"],
+        "tipo_ip": info_conexao["tipo"],
+        "confianca_deteccao": info_conexao["confianca"]
+    }
+    
     # Log será salvo dentro da pasta de resultados
     logfile = os.path.join(pasta, f"log_rede_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt")
+    
+    # Log das informações da conexão
+    log(f"=== INFORMAÇÕES DA CONEXÃO ===", logfile)
+    log(f"Provedor: {info_conexao['provedor']}", logfile)
+    log(f"IP Público: {info_conexao['ip']}", logfile)
+    log(f"Hostname: {info_conexao['hostname']}", logfile)
+    log(f"Tipo IP: {info_conexao['tipo']}", logfile)
+    log(f"Confiança: {info_conexao['confianca']}%", logfile)
+    log(f"Data/Hora: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}", logfile)
+    log(f"=== INÍCIO DOS TESTES ===\n", logfile)
     
     # Progress bar para todo o processo
     with Progress(
@@ -576,16 +906,31 @@ def main():
         for nome, host in DESTINOS.items():
             nome_simples = nome.split(' ', 1)[-1]  # Remove emoji
             resultado = ping(host)
+            
+            # Extrair resumo do ping
+            ping_info = formatar_ping_resumo(resultado)
+            
             # Análise rápida do resultado
             if "100% packet loss" in resultado:
                 status_emoji = "❌"
+                status_cor = "red"
             elif "0% packet loss" in resultado:
                 status_emoji = "✅"
+                status_cor = "green"
             else:
                 status_emoji = "⚠️"
+                status_cor = "yellow"
+                
+            console.print(f"{status_emoji} [bold]{nome}[/bold] → {ping_info['ip']}")
             
-            console.print(f"{status_emoji} [bold]{nome}[/bold]")
-            console.print(f"[dim]{resultado.strip()}[/dim]\n")
+            if ping_info['latencia_avg'] > 0:
+                console.print(f"   📊 [cyan]Latência:[/cyan] {ping_info['latencia_avg']:.1f}ms | "
+                            f"[cyan]Perda:[/cyan] {ping_info['perda']} | "
+                            f"[cyan]Pacotes:[/cyan] {ping_info['pacotes_recebidos']}/{ping_info['pacotes_enviados']}")
+            else:
+                console.print(f"   📊 [{status_cor}]Sem resposta - {ping_info['perda']} de perda[/{status_cor}]")
+            
+            console.print()
             resultados[f"Ping {nome_simples}"] = resultado
             log(f"Ping {nome_simples}: {resultado}", logfile)
         progress.update(main_task, advance=20)
@@ -597,8 +942,37 @@ def main():
         for nome, host in DESTINOS.items():
             nome_simples = nome.split(' ', 1)[-1]  # Remove emoji
             resultado = traceroute(host)
-            console.print(f"🔍 [bold]{nome}[/bold]:")
-            console.print(f"[dim]{resultado.strip()}[/dim]\n")
+            
+            # Extrair resumo do traceroute
+            trace_info = formatar_traceroute_resumo(resultado)
+            
+            console.print(f"🔍 [bold]{nome}[/bold] → {host}")
+            console.print(f"   🎯 [cyan]Destino:[/cyan] {trace_info['destino_info'].split(' ')[2] if trace_info['destino_info'] else 'N/A'}")
+            
+            # Mostrar rota simplificada (primeiros 3, últimos 3 saltos)
+            rota = trace_info['rota']
+            if len(rota) > 6:
+                primeiros = rota[:3]
+                ultimos = rota[-3:]
+                
+                console.print("   🛤️  [cyan]Rota resumida:[/cyan]")
+                for hop in primeiros:
+                    latencia_str = f"{hop['latencia']}ms" if hop['latencia'] > 0 else "timeout"
+                    console.print(f"      {hop['hop']:2d}. {hop['host'][:40]:<40} ({latencia_str})")
+                
+                if len(rota) > 6:
+                    console.print(f"      ... [dim]({len(rota)-6} saltos intermediários)[/dim]")
+                
+                for hop in ultimos:
+                    latencia_str = f"{hop['latencia']}ms" if hop['latencia'] > 0 else "timeout"
+                    console.print(f"      {hop['hop']:2d}. {hop['host'][:40]:<40} ({latencia_str})")
+            else:
+                console.print("   🛤️  [cyan]Rota completa:[/cyan]")
+                for hop in rota[:8]:  # Limitar a 8 saltos para não poluir
+                    latencia_str = f"{hop['latencia']}ms" if hop['latencia'] > 0 else "timeout"
+                    console.print(f"      {hop['hop']:2d}. {hop['host'][:40]:<40} ({latencia_str})")
+            
+            console.print()
             resultados[f"Traceroute {nome_simples}"] = resultado
             log(f"Traceroute {nome_simples}: {resultado}", logfile)
         progress.update(main_task, advance=25)
@@ -610,8 +984,23 @@ def main():
         for nome, host in DESTINOS.items():
             nome_simples = nome.split(' ', 1)[-1]  # Remove emoji
             resultado = mtr_analysis(host)
-            console.print(f"📈 [bold]{nome}[/bold]:")
-            console.print(f"[dim]{resultado.strip()}[/dim]\n")
+            
+            # Extrair resumo do MTR
+            mtr_info = formatar_mtr_resumo(resultado)
+            
+            console.print(f"📈 [bold]{nome}[/bold] → {host}")
+            
+            if mtr_info['latencia_final'] > 0:
+                console.print(f"   🎯 [cyan]Latência final:[/cyan] {mtr_info['latencia_final']:.1f}ms")
+            
+            if mtr_info['hops_problematicos']:
+                console.print("   ⚠️  [yellow]Saltos com perda detectada:[/yellow]")
+                for hop in mtr_info['hops_problematicos'][:5]:  # Mostrar até 5 problemáticos
+                    console.print(f"      {hop['hop']:2d}. {hop['host'][:35]:<35} ({hop['perda']:.1f}% perda)")
+            else:
+                console.print("   ✅ [green]Rota estável - sem perdas significativas[/green]")
+            
+            console.print()
             resultados[f"MTR {nome_simples}"] = resultado
             log(f"MTR {nome_simples}: {resultado}", logfile)
         progress.update(main_task, advance=20)

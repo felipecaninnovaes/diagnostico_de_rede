@@ -7,10 +7,10 @@ import re
 
 # === CONFIGURAÇÕES ===
 gateway_ip = "10.15.10.1"       # IP do roteador
-ip_lan = "10.15.10.20"                    # Outro dispositivo na LAN (opcional)
+ip_lan = "10.15.1.21"                    # Outro dispositivo na LAN (opcional)
 dns_alvo = "1.1.1.1"             # DNS para teste (Cloudflare)
 dns_site = "www.cloudflare.com"  # Domínio a ser resolvido
-iperf3_server_ip = "10.15.10.20"          # Ex: "192.168.0.105" (onde o servidor iperf3 está rodando)
+iperf3_server_ip = "10.15.1.21"          # Ex: "192.168.0.105" (onde o servidor iperf3 está rodando)
 
 logfile = f"log_rede_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
 
