@@ -22,7 +22,7 @@ class ReportService:
         try:
             if not filename:
                 timestamp = test_results.timestamp.strftime("%Y%m%d_%H%M%S")
-                isp_name = test_results.isp_info.provider.value.lower()
+                isp_name = test_results.isp_info.provider.value.lower().replace("/", "_").replace(" ", "_")
                 filename = f"network_test_{isp_name}_{timestamp}.json"
             
             filepath = self.output_dir / filename
@@ -44,7 +44,7 @@ class ReportService:
         try:
             if not filename:
                 timestamp = test_results.timestamp.strftime("%Y%m%d_%H%M%S")
-                isp_name = test_results.isp_info.provider.value.lower()
+                isp_name = test_results.isp_info.provider.value.lower().replace("/", "_").replace(" ", "_")
                 filename = f"network_test_{isp_name}_{timestamp}.txt"
             
             filepath = self.output_dir / filename
@@ -85,21 +85,93 @@ class ReportService:
     
     def _convert_to_serializable(self, test_results: TestResults) -> Dict[str, Any]:
         """Converte TestResults para formato serializável."""
-        def convert_datetime(obj):
-            if isinstance(obj, datetime):
-                return obj.isoformat()
-            elif hasattr(obj, '__dict__'):
-                return {k: convert_datetime(v) for k, v in obj.__dict__.items()}
-            elif isinstance(obj, list):
-                return [convert_datetime(item) for item in obj]
-            elif isinstance(obj, dict):
-                return {k: convert_datetime(v) for k, v in obj.items()}
-            else:
-                return obj
-        
-        # Converte usando asdict e processa datetimes
-        data = asdict(test_results)
-        return convert_datetime(data)
+        return {
+            "timestamp": test_results.timestamp.isoformat(),
+            "isp_info": {
+                "provider": test_results.isp_info.provider.value,
+                "public_ip": test_results.isp_info.public_ip,
+                "hostname": test_results.isp_info.hostname,
+                "confidence_level": test_results.isp_info.confidence_level
+            },
+            "summary": {
+                "total_tests": test_results.summary.total_tests,
+                "successful_tests": test_results.summary.successful_tests,
+                "failed_tests": test_results.summary.failed_tests,
+                "warning_tests": test_results.summary.warning_tests,
+                "success_rate": test_results.summary.success_rate,
+                "average_latency": test_results.summary.average_latency
+            },
+            "tests": [
+                {
+                    "target": test.target,
+                    "timestamp": test.timestamp.isoformat(),
+                    "ping": self._serialize_ping(test.ping_result) if test.ping_result else None,
+                    "traceroute": self._serialize_traceroute(test.traceroute_result) if test.traceroute_result else None,
+                    "mtr": self._serialize_mtr(test.mtr_result) if test.mtr_result else None,
+                    "speed_test": self._serialize_speed_test(test.speed_test_result) if test.speed_test_result else None
+                }
+                for test in test_results.tests
+            ]
+        }
+    
+    def _serialize_ping(self, ping_result) -> Dict[str, Any]:
+        """Serializa resultado de ping."""
+        return {
+            "status": ping_result.status.value,
+            "packets_sent": ping_result.packets_sent,
+            "packets_received": ping_result.packets_received,
+            "packet_loss_percent": ping_result.packet_loss_percent,
+            "min_time": ping_result.min_time,
+            "avg_time": ping_result.avg_time,
+            "max_time": ping_result.max_time,
+            "mdev_time": ping_result.mdev_time
+        }
+    
+    def _serialize_traceroute(self, traceroute_result) -> Dict[str, Any]:
+        """Serializa resultado de traceroute."""
+        return {
+            "status": traceroute_result.status.value,
+            "total_hops": traceroute_result.total_hops,
+            "hops": [
+                {
+                    "hop_number": hop.hop_number,
+                    "ip_address": hop.ip_address,
+                    "response_time": hop.response_time,
+                    "is_timeout": hop.is_timeout
+                }
+                for hop in traceroute_result.hops
+            ]
+        }
+    
+    def _serialize_mtr(self, mtr_result) -> Dict[str, Any]:
+        """Serializa resultado de MTR."""
+        return {
+            "status": mtr_result.status.value,
+            "total_hops": mtr_result.total_hops,
+            "total_loss_percent": mtr_result.total_loss_percent,
+            "avg_latency": mtr_result.avg_latency,
+            "hops": [
+                {
+                    "hop_number": hop.hop_number,
+                    "hostname": hop.hostname,
+                    "ip_address": hop.ip_address,
+                    "loss_percent": hop.loss_percent,
+                    "avg_time": hop.avg_time
+                }
+                for hop in mtr_result.hops
+            ]
+        }
+    
+    def _serialize_speed_test(self, speed_result) -> Dict[str, Any]:
+        """Serializa resultado de speed test."""
+        return {
+            "status": speed_result.status.value,
+            "download_speed": speed_result.download_speed,
+            "upload_speed": speed_result.upload_speed,
+            "ping_latency": speed_result.ping_latency,
+            "server_name": speed_result.server_name,
+            "server_location": speed_result.server_location
+        }
     
     def _generate_text_content(self, test_results: TestResults) -> str:
         """Gera conteúdo do relatório em texto."""
