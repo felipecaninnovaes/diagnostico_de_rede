@@ -278,7 +278,8 @@ class ConsolePresenter:
                 
                 table = Table(title=title, border_style=status_style)
                 table.add_column("Hop", style="cyan", width=4)
-                table.add_column("Hostname/IP", style="white", width=30)
+                # Aumenta a largura para mostrar domínios completos (ex.: dsl.telesp.net.br, vivozap.com.br)
+                table.add_column("Hostname/IP", style="white", width=40)
                 table.add_column("Perda %", justify="right", width=8)
                 table.add_column("Enviados", justify="right", width=8)
                 table.add_column("Último", justify="right", width=8)
@@ -295,13 +296,28 @@ class ConsolePresenter:
                     else:
                         loss_style = "red"
                     
-                    # Formata hostname/IP
-                    if hop.hostname and hop.hostname != hop.ip_address:
-                        host_display = hop.hostname[:25] + "..." if len(hop.hostname) > 25 else hop.hostname
-                        if hop.ip_address and hop.ip_address != hop.hostname:
-                            host_display += f" ({hop.ip_address})"
+                    # Formata hostname/IP priorizando nomes resolvidos (evita mostrar 'AS???')
+                    def _is_unknown(host: Optional[str]) -> bool:
+                        if not host:
+                            return True
+                        h = str(host).strip().upper()
+                        return h == "AS???" or h.startswith("AS???") or h == "???"
+
+                    hostname = None if _is_unknown(getattr(hop, "hostname", None)) else getattr(hop, "hostname", None)
+                    ipaddr = getattr(hop, "ip_address", None)
+
+                    if hostname and (not ipaddr or hostname != ipaddr):
+                        host_display = hostname
+                        if ipaddr and ipaddr != hostname:
+                            host_display += f" ({ipaddr})"
+                    elif ipaddr:
+                        host_display = ipaddr
                     else:
-                        host_display = hop.ip_address or "???"
+                        host_display = "???"
+
+                    # Trunca suavemente apenas se muito longo
+                    if len(host_display) > 50:
+                        host_display = host_display[:47] + "..."
                     
                     table.add_row(
                         str(hop.hop_number),

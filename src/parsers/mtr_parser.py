@@ -1,14 +1,7 @@
-"""Parser pa    def __init__(self):
-        # Padrão para linha de hop do MTR
-        # HOST: hostname                    Loss%   Snt   Last   Avg  Best  Wrst StDev
-        # Exemplo: "  2. AS???    152-255-239-67.user.vivozap.com.br (152.255.239.67)     0.0%    30    3.0   3.1   2.5  10.6   1.5"
-        self.hop_pattern = re.compile(
-            r'^\s*(\d+)\.\s+AS[\d?]*\s*(.+?)\s+([\d.]+)%\s+(\d+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)'
-        )
-        self.ip_pattern = re.compile(r'\(([\d.]+)\)')  # IP entre parêntesesados de MTR."""
+"""Parser para resultados de MTR."""
 
 import re
-from typing import List, Optional
+from typing import Optional
 from datetime import datetime
 
 from ..models.network_test import MTRResult, MTRHop, TestStatus
@@ -16,58 +9,41 @@ from ..models.network_test import MTRResult, MTRHop, TestStatus
 
 class MTRParser:
     """Parser para resultados do comando MTR."""
-    
+
     def __init__(self):
-        # Padrão para linha de hop do MTR
-        # HOST: hostname                    Loss%   Snt   Last   Avg  Best  Wrst StDev
-        # Exemplo: "  1. AS???    _gateway (10.15.10.1)                                   0.0%    10    0.2   0.2   0.1   0.3   0.0"
+        # Ex.: "  2. AS???    152-255-239-67.user.vivozap.com.br (152.255.239.67)     0.0%    30    3.0   3.1   2.5  10.6   1.5"
+        # Ex.: "  6. AS15169  72.14.220.222                                           0.0%    30   17.3  17.5  17.0  24.5   1.3"
         self.hop_pattern = re.compile(
-            r'^\s*(\d+)\.\s+AS\d*\s+(.+?)\s+([\d.]+)%\s+(\d+)\s+'
-            r'([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)'
+            r"^\s*(\d+)\.\s+AS\S+\s+(.+?)\s+"  # hop e campo hostname/ip (sem o AS)
+            r"([\d.]+)%\s+(\d+)\s+"              # perda e enviados
+            r"([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s*$"  # last/avg/best/wrst/stdev
         )
-        self.ip_pattern = re.compile(r'\(([\d.]+)\)')  # IP entre parênteses
-    
+        self.ip_in_parens = re.compile(r"\(([\d.]+)\)")
+        self.is_ipv4 = re.compile(r"^\d+\.\d+\.\d+\.\d+$")
+
     def parse(self, output: str, target: str) -> MTRResult:
-        """Faz o parse da saída do comando MTR."""
         try:
-            lines = output.strip().split('\n')
+            lines = output.strip().split("\n")
             hops = []
-            
             for line in lines:
                 hop = self._parse_hop_line(line)
                 if hop:
                     hops.append(hop)
-            
-            # Calcula estatísticas agregadas de forma mais precisa
+
             if hops:
-                # Perda total: maior perda encontrada entre os hops (worst case)
-                total_loss = max(hop.loss_percent for hop in hops)
-                
-                # Latência: média apenas dos hops que responderam
-                responding_hops = [hop for hop in hops if hop.avg_time > 0]
-                avg_latency = sum(hop.avg_time for hop in responding_hops) / len(responding_hops) if responding_hops else 0
-                
-                # Se há hops com perda significativa, considera isso
-                problematic_hops = [hop for hop in hops if hop.loss_percent > 5]
-                if problematic_hops:
-                    # Usa a média de perda dos hops problemáticos se for mais alta
-                    problematic_loss = sum(hop.loss_percent for hop in problematic_hops) / len(problematic_hops)
-                    total_loss = max(total_loss, problematic_loss)
+                total_loss = max(h.loss_percent for h in hops)
+                responding = [h for h in hops if h.avg_time > 0]
+                avg_latency = sum(h.avg_time for h in responding) / len(responding) if responding else 0.0
             else:
-                total_loss = 0
-                avg_latency = 0
-            
-            # Determina status baseado em análise mais rigorosa
+                total_loss = 0.0
+                avg_latency = 0.0
+
             status = TestStatus.SUCCESS
-            if not hops:
-                status = TestStatus.FAILED
-            elif total_loss > 20:  # Perda crítica
-                status = TestStatus.FAILED
-            elif total_loss > 5 or avg_latency > 200:  # Problemas significativos
+            if not hops or total_loss > 20:
+                status = TestStatus.FAILED if not hops or total_loss > 20 else TestStatus.SUCCESS
+            elif total_loss > 5 or avg_latency > 200 or any(h.loss_percent > 10 for h in hops):
                 status = TestStatus.WARNING
-            elif any(hop.loss_percent > 10 for hop in hops):  # Hop específico com problema
-                status = TestStatus.WARNING
-            
+
             return MTRResult(
                 status=status,
                 target=target,
@@ -76,9 +52,8 @@ class MTRParser:
                 total_loss_percent=total_loss,
                 avg_latency=avg_latency,
                 timestamp=datetime.now(),
-                raw_output=output
+                raw_output=output,
             )
-            
         except Exception as e:
             return MTRResult(
                 status=TestStatus.FAILED,
@@ -89,140 +64,57 @@ class MTRParser:
                 avg_latency=0.0,
                 timestamp=datetime.now(),
                 raw_output=output,
-                error_message=str(e)
+                error_message=str(e),
             )
-    
-    def _parse_hop_line(self, line: str) -> Optional[MTRHop]:
-        """Faz o parse de uma linha de hop do MTR."""
-        try:
-            # Verifica se é linha de cabeçalho ou dados
-            if ('HOST:' in line or 'Loss%' in line or 
-                line.strip().startswith('Start') or
-                not line.strip()):
-                return None
 
-            # Parse usando regex
-            match = self.hop_pattern.match(line)
-            if match:
-                hop_number = int(match.group(1))
-                hostname = match.group(2)
-                loss_percent = float(match.group(3))
-                sent_packets = int(match.group(4))
-                last_time = float(match.group(5))
-                avg_time = float(match.group(6))
-                best_time = float(match.group(7))
-                worst_time = float(match.group(8))
-                std_dev = float(match.group(9))
-                
-                # Extrai o hostname completo do campo capturado
-                hostname_raw = hostname.strip()
-                
-                # Se contém "???" significa que é AS desconhecido, mas pode ter hostname válido
-                if "???" in hostname_raw:
-                    # Procura por hostname válido após o ???
-                    parts = hostname_raw.split()
-                    hostname_final = None
-                    ip_address = None
-                    
-                    for i, part in enumerate(parts):
-                        if part != "???" and ("." in part or "(" in part):
-                            # Encontrou início do hostname real
-                            hostname_parts = parts[i:]
-                            hostname_with_ip = " ".join(hostname_parts)
-                            
-                            # Extrai IP se estiver entre parênteses
-                            ip_match = self.ip_pattern.search(hostname_with_ip)
-                            if ip_match:
-                                ip_address = ip_match.group(1)
-                                hostname_final = hostname_with_ip.replace(f"({ip_address})", "").strip()
-                            else:
-                                hostname_final = hostname_with_ip
-                                ip_address = hostname_with_ip
-                            break
-                    
-                    # Se não encontrou hostname válido, usa placeholder
-                    if not hostname_final:
-                        hostname_final = "AS???"
-                        ip_address = "AS???"
-                else:
-                    # Hostname sem AS prefix
-                    ip_match = self.ip_pattern.search(hostname_raw)
-                    if ip_match:
-                        ip_address = ip_match.group(1)
-                        hostname_final = hostname_raw.replace(f"({ip_address})", "").strip()
-                    else:
-                        hostname_final = hostname_raw
-                        ip_address = hostname_raw
-                
-                return MTRHop(
-                    hop_number=hop_number,
-                    hostname=hostname_final,
-                    ip_address=ip_address,
-                    loss_percent=loss_percent,
-                    sent_packets=sent_packets,
-                    last_time=last_time,
-                    avg_time=avg_time,
-                    best_time=best_time,
-                    worst_time=worst_time,
-                    std_dev=std_dev
-                )
-            
-            # Fallback para formato alternativo
-            return self._parse_hop_line_fallback(line)
-            
-        except Exception:
+    def _parse_hop_line(self, line: str) -> Optional[MTRHop]:
+        line_stripped = line.rstrip()
+        if (not line_stripped or line_stripped.startswith("Start") or "HOST:" in line_stripped or "Loss%" in line_stripped):
             return None
-    
-    def _parse_hop_line_fallback(self, line: str) -> Optional[MTRHop]:
-        """Parse alternativo para diferentes formatos de MTR."""
-        try:
-            parts = line.split()
-            if len(parts) < 3:
-                return None
-            
-            # Tenta extrair número do hop
-            hop_match = re.match(r'(\d+)', parts[0])
-            if not hop_match:
-                return None
-            
-            hop_number = int(hop_match.group(1))
-            
-            # Procura por hostname/IP
-            hostname = parts[1] if len(parts) > 1 else '???'
-            
-            # Procura por perda de pacotes
-            loss_percent = 0.0
-            for part in parts:
-                if '%' in part:
-                    try:
-                        loss_percent = float(part.replace('%', ''))
-                        break
-                    except ValueError:
-                        continue
-            
-            # Procura por tempos
-            times = []
-            for part in parts:
-                try:
-                    if '.' in part and part.replace('.', '').isdigit():
-                        times.append(float(part))
-                except ValueError:
-                    continue
-            
-            avg_time = sum(times) / len(times) if times else 0.0
-            
-            return MTRHop(
-                hop_number=hop_number,
-                hostname=hostname,
-                ip_address=hostname,
-                loss_percent=loss_percent,
-                sent_packets=10,  # Default MTR count
-                last_time=times[-1] if times else 0.0,
-                avg_time=avg_time,
-                best_time=min(times) if times else 0.0,
-                worst_time=max(times) if times else 0.0,
-                std_dev=0.0
-            )
-            
-        except Exception:
+
+        m = self.hop_pattern.match(line_stripped)
+        if not m:
             return None
+
+        hop_number = int(m.group(1))
+        name_field = m.group(2).strip()
+        loss_percent = float(m.group(3))
+        sent_packets = int(m.group(4))
+        last_time = float(m.group(5))
+        avg_time = float(m.group(6))
+        best_time = float(m.group(7))
+        worst_time = float(m.group(8))
+        std_dev = float(m.group(9))
+
+        # Extrai IP entre parênteses, se houver
+        ip_match = self.ip_in_parens.search(name_field)
+        if ip_match:
+            ip_address = ip_match.group(1)
+            hostname = name_field.replace(f"({ip_address})", "").strip()
+        else:
+            # Sem parênteses: pode ser hostname puro, IP puro ou ???
+            if self.is_ipv4.match(name_field):
+                ip_address = name_field
+                hostname = name_field  # sem reverse DNS
+            else:
+                hostname = name_field
+                ip_address = name_field if self.is_ipv4.match(name_field) else (None if name_field == "???" else None)
+
+        # Normaliza quando desconhecido
+        if not hostname or hostname.upper().startswith("AS???") or hostname == "???":
+            hostname = None
+        if not ip_address:
+            ip_address = hostname or "???"
+
+        return MTRHop(
+            hop_number=hop_number,
+            hostname=hostname or "AS???",
+            ip_address=ip_address,
+            loss_percent=loss_percent,
+            sent_packets=sent_packets,
+            last_time=last_time,
+            avg_time=avg_time,
+            best_time=best_time,
+            worst_time=worst_time,
+            std_dev=std_dev,
+        )
