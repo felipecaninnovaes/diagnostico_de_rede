@@ -61,11 +61,19 @@ class PingParser:
                 result.max_time = float(rtt_match.group(3))
                 result.mdev_time = float(rtt_match.group(4))
             
-            # Verifica se houve falha total
-            if result.packets_received == 0:
+            # Determina status baseado nos dados coletados
+            if result.packets_sent == 0 and result.avg_time == 0:
+                # Nenhum dado coletado - falha total
+                result.status = TestStatus.FAILED
+            elif result.packet_loss_percent == 100:
+                # Perda total de pacotes
                 result.status = TestStatus.FAILED
             elif result.packet_loss_percent > 50:
+                # Perda significativa
                 result.status = TestStatus.WARNING
+            else:
+                # Funcionando normalmente
+                result.status = TestStatus.SUCCESS
             
             return result
             
